@@ -1,5 +1,5 @@
-//go:build darwin || linux
-// +build darwin linux
+//go:build darwin || (linux && !android)
+// +build darwin linux,!android
 
 /*
  * Copyright (c) 2021, Psiphon Inc.

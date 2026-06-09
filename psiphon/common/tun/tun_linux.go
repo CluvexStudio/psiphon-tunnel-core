@@ -1,3 +1,6 @@
+//go:build linux && !android
+// +build linux,!android
+
 /*
  * Copyright (c) 2017, Psiphon Inc.
  * All rights reserved.

@@ -1,5 +1,5 @@
-//go:build !darwin && !linux && !windows
-// +build !darwin,!linux,!windows
+//go:build android || (!darwin && !linux && !windows)
+// +build android !darwin,!linux,!windows
 
 /*
  * Copyright (c) 2017, Psiphon Inc.
