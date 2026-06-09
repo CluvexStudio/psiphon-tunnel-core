@@ -25,9 +25,9 @@ import (
 	"strings"
 	"sync"
 
-	socks "github.com/Psiphon-Labs/goptlib"
 	"github.com/Psiphon-Labs/psiphon-tunnel-core/psiphon/common"
 	"github.com/Psiphon-Labs/psiphon-tunnel-core/psiphon/common/errors"
+	socks "github.com/Psiphon-Labs/psiphon-tunnel-core/psiphon/common/goptlib"
 )
 
 // SocksProxy is a SOCKS server that accepts local host connections
