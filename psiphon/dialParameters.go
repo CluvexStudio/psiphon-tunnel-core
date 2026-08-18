@@ -2270,11 +2270,25 @@ func selectFrontingParameters(
 func (dialParams *DialParameters) applyFrontedMeekDialOverride(
 	p parameters.ParametersAccessor) (bool, error) {
 
+	dialAddressCandidates := []string{dialParams.MeekFrontingDialAddress}
+	if dialParams.ServerEntry != nil {
+		if dialParams.ServerEntry.MeekFrontingDomain != "" {
+			dialAddressCandidates = append(
+				dialAddressCandidates, dialParams.ServerEntry.MeekFrontingDomain)
+		}
+		dialAddressCandidates = append(
+			dialAddressCandidates, dialParams.ServerEntry.MeekFrontingAddresses...)
+		if dialParams.ServerEntry.MeekFrontingAddressesRegex != "" {
+			dialAddressCandidates = append(
+				dialAddressCandidates, dialParams.ServerEntry.MeekFrontingAddressesRegex)
+		}
+	}
+
 	override, scanCandidate, scanStateKey, ok, err := selectFrontedMeekCDNScanOverride(
 		p,
 		dialParams.NetworkID,
 		dialParams.FrontingProviderID,
-		dialParams.MeekFrontingDialAddress,
+		dialAddressCandidates,
 		dialParams.MeekFrontingHost,
 		dialParams.frontedMeekCDNDialOverrideCandidateNumber())
 	if err != nil {
@@ -2299,12 +2313,19 @@ func (dialParams *DialParameters) applyFrontedMeekDialOverride(
 		override.SNIServerName != "" &&
 			override.SNIServerName != override.DialAddress
 
-	dialParams.MeekVerifyServerNames = override.VerifyServerNames
-	dialParams.MeekVerifyServerName = ""
-	if len(override.VerifyServerNames) > 0 {
-		dialParams.MeekVerifyServerName = override.VerifyServerNames[0]
+	if override.SkipCertVerify ||
+		protocol.TunnelProtocolUsesFrontedMeekQUIC(dialParams.TunnelProtocol) {
+		dialParams.MeekVerifyServerNames = nil
+		dialParams.MeekVerifyServerName = ""
+		dialParams.MeekVerifyPins = nil
+	} else {
+		dialParams.MeekVerifyServerNames = override.VerifyServerNames
+		dialParams.MeekVerifyServerName = ""
+		if len(override.VerifyServerNames) > 0 {
+			dialParams.MeekVerifyServerName = override.VerifyServerNames[0]
+		}
+		dialParams.MeekVerifyPins = override.VerifyPins
 	}
-	dialParams.MeekVerifyPins = override.VerifyPins
 	dialParams.MeekTLSALPNProtocols = override.ALPNProtocols
 
 	if override.TLSProfile != "" &&

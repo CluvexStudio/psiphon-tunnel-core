@@ -104,7 +104,7 @@ func selectFrontedMeekCDNScanOverride(
 	p parameters.ParametersAccessor,
 	networkID string,
 	frontingProviderID string,
-	dialAddress string,
+	dialAddresses []string,
 	hostHeader string,
 	candidateNumber int) (
 	*parameters.FrontedMeekDialOverrideParameters,
@@ -126,7 +126,7 @@ func selectFrontedMeekCDNScanOverride(
 	overrides := p.FrontedMeekDialOverrides(parameters.FrontedMeekDialOverrides)
 	overrideCandidateCount, err := overrides.CandidateCount(
 		frontingProviderID,
-		dialAddress,
+		dialAddresses,
 		hostHeader)
 	if err != nil {
 		return nil, nil, "", false, errors.Trace(err)
@@ -141,7 +141,7 @@ func selectFrontedMeekCDNScanOverride(
 	if scanCandidateCount == 0 {
 		override, ok, err := overrides.SelectCandidateParameters(
 			frontingProviderID,
-			dialAddress,
+			dialAddresses,
 			hostHeader,
 			candidateNumber)
 		return override, nil, "", ok, errors.Trace(err)
@@ -178,7 +178,7 @@ func selectFrontedMeekCDNScanOverride(
 			if sourceCandidateNumber < overrideCandidateCount {
 				override, ok, err := overrides.SelectCandidateParametersNoWrap(
 					frontingProviderID,
-					dialAddress,
+					dialAddresses,
 					hostHeader,
 					sourceCandidateNumber)
 				if err != nil {

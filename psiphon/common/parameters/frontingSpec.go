@@ -85,6 +85,7 @@ type FrontedMeekDialOverride struct {
 	VerifyPins        []string `json:",omitempty"`
 	ALPNProtocols     []string `json:",omitempty"`
 	TLSProfile        string   `json:",omitempty"`
+	SkipCertVerify    bool     `json:",omitempty"`
 }
 
 // FrontedMeekDialOverrideParameters is the selected override state returned by
@@ -97,6 +98,7 @@ type FrontedMeekDialOverrideParameters struct {
 	VerifyPins        []string
 	ALPNProtocols     []string
 	TLSProfile        string
+	SkipCertVerify    bool
 }
 
 // FrontedMeekCDNScanSpec configures user-provided CDN edge scan candidates.
@@ -231,10 +233,13 @@ func (specs FrontingSpecs) Validate(allowSkipVerify bool) error {
 }
 
 // SelectParameters selects a fronted meek dial override matching the original
-// fronting provider, dial address, and Host header. Match groups are ANDed;
-// regexes within each group are ORed.
+// fronting provider, dial addresses, and Host header. Match groups are ANDed;
+// regexes within each group are ORed. MatchDialAddressRegexes is matched
+// against any of the dialAddresses values.
 func (overrides FrontedMeekDialOverrideSpecs) SelectParameters(
-	frontingProviderID, dialAddress, hostHeader string) (*FrontedMeekDialOverrideParameters, bool, error) {
+	frontingProviderID string,
+	dialAddresses []string,
+	hostHeader string) (*FrontedMeekDialOverrideParameters, bool, error) {
 
 	if len(overrides) == 0 {
 		return nil, false, nil
@@ -244,7 +249,7 @@ func (overrides FrontedMeekDialOverrideSpecs) SelectParameters(
 		if override == nil {
 			continue
 		}
-		matches, err := override.matches(frontingProviderID, dialAddress, hostHeader)
+		matches, err := override.matches(frontingProviderID, dialAddresses, hostHeader)
 		if err != nil {
 			return nil, false, errors.Trace(err)
 		}
@@ -273,11 +278,13 @@ type frontedMeekDialOverrideCandidate struct {
 
 // CandidateCount returns the number of matching override dial candidates.
 func (overrides FrontedMeekDialOverrideSpecs) CandidateCount(
-	frontingProviderID, dialAddress, hostHeader string) (int, error) {
+	frontingProviderID string,
+	dialAddresses []string,
+	hostHeader string) (int, error) {
 
 	candidates, err := overrides.matchingCandidates(
 		frontingProviderID,
-		dialAddress,
+		dialAddresses,
 		hostHeader)
 	if err != nil {
 		return 0, errors.Trace(err)
@@ -289,7 +296,9 @@ func (overrides FrontedMeekDialOverrideSpecs) CandidateCount(
 // addresses in config order. candidateNumber advances through that ordered
 // candidate list, wrapping when all candidates have been tried.
 func (overrides FrontedMeekDialOverrideSpecs) SelectCandidateParameters(
-	frontingProviderID, dialAddress, hostHeader string,
+	frontingProviderID string,
+	dialAddresses []string,
+	hostHeader string,
 	candidateNumber int) (*FrontedMeekDialOverrideParameters, bool, error) {
 
 	if candidateNumber < 0 {
@@ -298,7 +307,7 @@ func (overrides FrontedMeekDialOverrideSpecs) SelectCandidateParameters(
 
 	candidates, err := overrides.matchingCandidates(
 		frontingProviderID,
-		dialAddress,
+		dialAddresses,
 		hostHeader)
 	if err != nil {
 		return nil, false, errors.Trace(err)
@@ -316,7 +325,9 @@ func (overrides FrontedMeekDialOverrideSpecs) SelectCandidateParameters(
 // SelectCandidateParametersNoWrap selects from all matching overrides and dial
 // addresses in config order without wrapping candidateNumber.
 func (overrides FrontedMeekDialOverrideSpecs) SelectCandidateParametersNoWrap(
-	frontingProviderID, dialAddress, hostHeader string,
+	frontingProviderID string,
+	dialAddresses []string,
+	hostHeader string,
 	candidateNumber int) (*FrontedMeekDialOverrideParameters, bool, error) {
 
 	if candidateNumber < 0 {
@@ -325,7 +336,7 @@ func (overrides FrontedMeekDialOverrideSpecs) SelectCandidateParametersNoWrap(
 
 	candidates, err := overrides.matchingCandidates(
 		frontingProviderID,
-		dialAddress,
+		dialAddresses,
 		hostHeader)
 	if err != nil {
 		return nil, false, errors.Trace(err)
@@ -341,7 +352,9 @@ func (overrides FrontedMeekDialOverrideSpecs) SelectCandidateParametersNoWrap(
 }
 
 func (overrides FrontedMeekDialOverrideSpecs) matchingCandidates(
-	frontingProviderID, dialAddress, hostHeader string) (
+	frontingProviderID string,
+	dialAddresses []string,
+	hostHeader string) (
 	[]frontedMeekDialOverrideCandidate, error) {
 
 	if len(overrides) == 0 {
@@ -354,7 +367,7 @@ func (overrides FrontedMeekDialOverrideSpecs) matchingCandidates(
 		if override == nil {
 			continue
 		}
-		matches, err := override.matches(frontingProviderID, dialAddress, hostHeader)
+		matches, err := override.matches(frontingProviderID, dialAddresses, hostHeader)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -397,6 +410,7 @@ func makeFrontedMeekDialOverrideParameters(
 		VerifyPins:        copyStrings(override.VerifyPins),
 		ALPNProtocols:     copyStrings(override.ALPNProtocols),
 		TLSProfile:        override.TLSProfile,
+		SkipCertVerify:    override.SkipCertVerify,
 	}
 }
 
@@ -768,6 +782,9 @@ func (overrides FrontedMeekDialOverrideSpecs) Validate(customTLSProfileNames []s
 		if len(override.VerifyPins) > 0 && len(override.VerifyServerNames) == 0 {
 			return errors.TraceNew("fronted meek dial override verify pins require verify server names")
 		}
+		if override.SkipCertVerify && len(override.VerifyPins) > 0 {
+			return errors.TraceNew("fronted meek dial override skip cert verify is incompatible with verify pins")
+		}
 		for _, pin := range override.VerifyPins {
 			if pin == "" {
 				return errors.TraceNew("empty fronted meek dial override verify pin")
@@ -792,14 +809,16 @@ func (overrides FrontedMeekDialOverrideSpecs) Validate(customTLSProfileNames []s
 }
 
 func (override *FrontedMeekDialOverride) matches(
-	frontingProviderID, dialAddress, hostHeader string) (bool, error) {
+	frontingProviderID string,
+	dialAddresses []string,
+	hostHeader string) (bool, error) {
 
 	matches, err := matchesRegexes(override.MatchFrontingProviderIDRegexes, frontingProviderID)
 	if err != nil || !matches {
 		return matches, errors.Trace(err)
 	}
 
-	matches, err = matchesRegexes(override.MatchDialAddressRegexes, dialAddress)
+	matches, err = matchesRegexesAny(override.MatchDialAddressRegexes, dialAddresses)
 	if err != nil || !matches {
 		return matches, errors.Trace(err)
 	}
@@ -831,6 +850,22 @@ func matchesRegexes(regexes []string, value string) (bool, error) {
 	}
 	for _, regex := range regexes {
 		matches, err := regexp.MatchString(regex, value)
+		if err != nil {
+			return false, errors.Trace(err)
+		}
+		if matches {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func matchesRegexesAny(regexes []string, values []string) (bool, error) {
+	if len(regexes) == 0 {
+		return true, nil
+	}
+	for _, value := range values {
+		matches, err := matchesRegexes(regexes, value)
 		if err != nil {
 			return false, errors.Trace(err)
 		}

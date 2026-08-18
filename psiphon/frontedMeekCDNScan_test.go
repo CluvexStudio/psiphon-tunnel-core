@@ -195,7 +195,7 @@ func TestFrontedMeekCDNScanSelectionPriority(t *testing.T) {
 		params.Get(),
 		"test-network",
 		"test-provider",
-		"front.example.com",
+		[]string{"front.example.com"},
 		"host.example.com",
 		0)
 	if err != nil || !ok {
@@ -211,7 +211,7 @@ func TestFrontedMeekCDNScanSelectionPriority(t *testing.T) {
 		params.Get(),
 		"test-network",
 		"test-provider",
-		"front.example.com",
+		[]string{"front.example.com"},
 		"host.example.com",
 		2)
 	if err != nil || !ok {
@@ -225,7 +225,7 @@ func TestFrontedMeekCDNScanSelectionPriority(t *testing.T) {
 		params.Get(),
 		"test-network",
 		"test-provider",
-		"front.example.com",
+		[]string{"front.example.com"},
 		"host.example.com",
 		3)
 	if err != nil || !ok {
@@ -263,7 +263,7 @@ func TestFrontedMeekCDNScanPreservesOverrideWrapping(t *testing.T) {
 		params.Get(),
 		"test-network",
 		"test-provider",
-		"front.example.com",
+		[]string{"front.example.com"},
 		"host.example.com",
 		3)
 	if err != nil || !ok {

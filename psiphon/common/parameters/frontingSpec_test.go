@@ -48,7 +48,7 @@ func TestFrontedMeekDialOverrideSpecs(t *testing.T) {
 	}
 
 	override, ok, err := overrides.SelectParameters(
-		"FASTLY", "example.fastly.net", "front.example")
+		"FASTLY", []string{"example.fastly.net"}, "front.example")
 	if err != nil {
 		t.Fatalf("SelectParameters failed: %s", err)
 	}
@@ -69,7 +69,7 @@ func TestFrontedMeekDialOverrideSpecs(t *testing.T) {
 	}
 
 	override, ok, err = overrides.SelectParameters(
-		"AKAMAI", "example.fastly.net", "front.example")
+		"AKAMAI", []string{"example.fastly.net"}, "front.example")
 	if err != nil {
 		t.Fatalf("SelectParameters failed: %s", err)
 	}
@@ -83,7 +83,7 @@ func TestFrontedMeekDialOverrideSpecs(t *testing.T) {
 
 	strictOverrides := FrontedMeekDialOverrideSpecs{overrides[0]}
 	_, ok, err = strictOverrides.SelectParameters(
-		"AKAMAI", "example.fastly.net", "front.example")
+		"AKAMAI", []string{"example.fastly.net"}, "front.example")
 	if err != nil {
 		t.Fatalf("SelectParameters failed: %s", err)
 	}
@@ -122,7 +122,7 @@ func TestFrontedMeekDialOverrideSpecsSelectCandidateParameters(t *testing.T) {
 
 	for _, expectedCandidate := range expected {
 		override, ok, err := overrides.SelectCandidateParameters(
-			"CDN", "front.example", "host.example",
+			"CDN", []string{"front.example"}, "host.example",
 			expectedCandidate.candidateNumber)
 		if err != nil {
 			t.Fatalf("SelectCandidateParameters failed: %s", err)
