@@ -336,6 +336,7 @@ const (
 	FrontedMeekDialOverridesProbability                = "FrontedMeekDialOverridesProbability"
 	FrontedMeekCDNScanSpecParameter                    = "FrontedMeekCDNScanSpec"
 	FrontedMeekCDNScanUseBuiltInSpec                   = "FrontedMeekCDNScanUseBuiltInSpec"
+	FrontedMeekCDNScanBuiltInSets                      = "FrontedMeekCDNScanBuiltInSets"
 	HoldOffDirectTunnelMinDuration                     = "HoldOffDirectTunnelMinDuration"
 	HoldOffDirectTunnelMaxDuration                     = "HoldOffDirectTunnelMaxDuration"
 	HoldOffDirectTunnelProviderRegions                 = "HoldOffDirectTunnelProviderRegions"
@@ -975,6 +976,7 @@ var defaultParameters = map[string]struct {
 	FrontedMeekDialOverridesProbability:          {value: 1.0, minimum: 0.0},
 	FrontedMeekCDNScanSpecParameter:              {value: FrontedMeekCDNScanSpec{}},
 	FrontedMeekCDNScanUseBuiltInSpec:             {value: false},
+	FrontedMeekCDNScanBuiltInSets:                {value: []string{}},
 
 	HoldOffDirectTunnelMinDuration:     {value: time.Duration(0), minimum: time.Duration(0)},
 	HoldOffDirectTunnelMaxDuration:     {value: time.Duration(0), minimum: time.Duration(0)},

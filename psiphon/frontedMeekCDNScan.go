@@ -301,7 +301,31 @@ func makeFrontedMeekCDNScanBuiltInCandidateSets(
 	if !p.Bool(parameters.FrontedMeekCDNScanUseBuiltInSpec) {
 		return nil
 	}
-	return frontedMeekCDNScanBuiltInCandidateSets
+
+	selected := p.Strings(parameters.FrontedMeekCDNScanBuiltInSets)
+	if len(selected) == 0 {
+		return frontedMeekCDNScanBuiltInCandidateSets
+	}
+
+	candidateSets := make([]frontedMeekCDNScanCandidateSet, 0, len(selected))
+	for _, name := range selected {
+		for _, candidateSet := range frontedMeekCDNScanBuiltInCandidateSets {
+			if frontedMeekCDNScanBuiltInSetNameMatches(name, candidateSet.name) {
+				candidateSets = append(candidateSets, candidateSet)
+				break
+			}
+		}
+	}
+	return candidateSets
+}
+
+func frontedMeekCDNScanBuiltInSetNameMatches(name, candidateSetName string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return false
+	}
+	return name == candidateSetName ||
+		name == strings.TrimPrefix(candidateSetName, "built-in-")
 }
 
 func frontedMeekCDNScanCandidateSetCount(

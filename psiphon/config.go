@@ -1095,6 +1095,14 @@ type Config struct {
 	FrontedMeekCDNScanSpec              parameters.FrontedMeekCDNScanSpec       `json:",omitempty"`
 	FrontedMeekCDNScanUseBuiltInSpec    bool                                    `json:",omitempty"`
 
+	// FrontedMeekCDNScanBuiltInSets restricts the built-in CDN scan corpus to
+	// the named candidate sets, in the order given. Names are the built-in set
+	// names, with or without the "built-in-" prefix, such as "cloudflare" or
+	// "built-in-fastly". When empty, every built-in set is used. Unknown names
+	// are ignored. FrontedMeekCDNScanBuiltInSets has no effect unless
+	// FrontedMeekCDNScanUseBuiltInSpec is set.
+	FrontedMeekCDNScanBuiltInSets []string `json:",omitempty"`
+
 	// ConjureCachedRegistrationTTLSeconds and other Conjure fields are for
 	// testing purposes.
 	ConjureCachedRegistrationTTLSeconds       *int                       `json:",omitempty"`
@@ -2739,6 +2747,10 @@ func (config *Config) makeConfigParameters() map[string]interface{} {
 		applyParameters[parameters.FrontedMeekCDNScanSpecParameter] = config.FrontedMeekCDNScanSpec
 	}
 
+	if len(config.FrontedMeekCDNScanBuiltInSets) > 0 {
+		applyParameters[parameters.FrontedMeekCDNScanBuiltInSets] = config.FrontedMeekCDNScanBuiltInSets
+	}
+
 	if config.FrontedMeekCDNScanUseBuiltInSpec {
 		applyParameters[parameters.FrontedMeekCDNScanUseBuiltInSpec] = true
 	}
@@ -3779,6 +3791,13 @@ func (config *Config) setDialParametersHash() {
 		hash.Write([]byte("FrontedMeekCDNScanSpec"))
 		encodedSpec, _ := json.Marshal(config.FrontedMeekCDNScanSpec)
 		hash.Write(encodedSpec)
+	}
+
+	if len(config.FrontedMeekCDNScanBuiltInSets) > 0 {
+		hash.Write([]byte("FrontedMeekCDNScanBuiltInSets"))
+		for _, name := range config.FrontedMeekCDNScanBuiltInSets {
+			hash.Write([]byte(name))
+		}
 	}
 
 	if config.FrontedMeekCDNScanUseBuiltInSpec {
