@@ -159,13 +159,14 @@ func runMockWebServer() (string, string) {
 func TestSSH(t *testing.T) {
 	runServer(t,
 		&runServerConfig{
-			tunnelProtocol:       "SSH",
-			requireAuthorization: true,
-			doTunneledWebRequest: true,
-			doTunneledNTPRequest: true,
-			doDanglingTCPConn:    true,
-			doLogHostProvider:    true,
-			doLogProtobuf:        useProtobufLogging,
+			tunnelProtocol:         "SSH",
+			requireAuthorization:   true,
+			doTunneledWebRequest:   true,
+			doTunneledNTPRequest:   true,
+			doTunneledUDPAssociate: true,
+			doDanglingTCPConn:      true,
+			doLogHostProvider:      true,
+			doLogProtobuf:          useProtobufLogging,
 		})
 }
 
@@ -846,6 +847,7 @@ type runServerConfig struct {
 	doTunneledWebRequest         bool
 	doTunneledDomainRequest      bool
 	doTunneledNTPRequest         bool
+	doTunneledUDPAssociate       bool
 	applyPrefix                  bool
 	forceFragmenting             bool
 	forceLivenessTest            bool
@@ -2337,6 +2339,23 @@ func runServer(t *testing.T, runConfig *runServerConfig) {
 			false, localHTTPProxyPort, "https://psiphon.ca", false, "")
 		if err != nil {
 			t.Fatalf("tunneled web request failed: %s", err)
+		}
+	}
+
+	if runConfig.doTunneledUDPAssociate {
+
+		// Test: tunneled UDP packets via SOCKS5 UDP ASSOCIATE
+
+		err = makeTunneledUDPAssociateRequest(t, localSOCKSProxyPort)
+
+		if err == nil {
+			if expectTrafficFailure {
+				t.Fatalf("unexpected tunneled UDP associate request success")
+			}
+		} else {
+			if !expectTrafficFailure {
+				t.Fatalf("tunneled UDP associate request failed: %s", err)
+			}
 		}
 	}
 
@@ -4041,6 +4060,252 @@ func makeTunneledWebRequest(
 	}
 
 	return nil
+}
+
+// makeTunneledUDPAssociateRequest exercises the client's SOCKS5 UDP ASSOCIATE
+// support, which relays datagrams over a udpgw channel. A DNS request resolves
+// a hostname, then an NTP request is made to the resolved address, so both the
+// transparent DNS path and an ordinary UDP port forward are covered.
+func makeTunneledUDPAssociateRequest(t *testing.T, localSOCKSProxyPort int) error {
+
+	timeout := 20 * time.Second
+
+	socksProxyAddress := fmt.Sprintf("127.0.0.1:%d", localSOCKSProxyPort)
+
+	controlConn, err := net.DialTimeout("tcp", socksProxyAddress, timeout)
+	if err != nil {
+		return fmt.Errorf("DialTimeout failed: %s", err)
+	}
+	defer controlConn.Close()
+
+	err = controlConn.SetDeadline(time.Now().Add(timeout))
+	if err != nil {
+		return fmt.Errorf("SetDeadline failed: %s", err)
+	}
+
+	_, err = controlConn.Write([]byte{0x05, 0x01, 0x00})
+	if err != nil {
+		return fmt.Errorf("write auth methods failed: %s", err)
+	}
+
+	authResponse := make([]byte, 2)
+	_, err = io.ReadFull(controlConn, authResponse)
+	if err != nil {
+		return fmt.Errorf("read auth response failed: %s", err)
+	}
+	if authResponse[0] != 0x05 || authResponse[1] != 0x00 {
+		return fmt.Errorf("unexpected auth response: %v", authResponse)
+	}
+
+	_, err = controlConn.Write(
+		[]byte{0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+	if err != nil {
+		return fmt.Errorf("write UDP associate request failed: %s", err)
+	}
+
+	associateResponse := make([]byte, 4)
+	_, err = io.ReadFull(controlConn, associateResponse)
+	if err != nil {
+		return fmt.Errorf("read UDP associate response failed: %s", err)
+	}
+	if associateResponse[0] != 0x05 {
+		return fmt.Errorf("unexpected SOCKS version: 0x%02x", associateResponse[0])
+	}
+	if associateResponse[1] != 0x00 {
+		return fmt.Errorf("UDP associate rejected: 0x%02x", associateResponse[1])
+	}
+
+	var relayIP net.IP
+	switch associateResponse[3] {
+	case 0x01:
+		relayIP = make(net.IP, net.IPv4len)
+	case 0x04:
+		relayIP = make(net.IP, net.IPv6len)
+	default:
+		return fmt.Errorf("unexpected address type: 0x%02x", associateResponse[3])
+	}
+	_, err = io.ReadFull(controlConn, relayIP)
+	if err != nil {
+		return fmt.Errorf("read relay address failed: %s", err)
+	}
+	rawRelayPort := make([]byte, 2)
+	_, err = io.ReadFull(controlConn, rawRelayPort)
+	if err != nil {
+		return fmt.Errorf("read relay port failed: %s", err)
+	}
+	relayAddr := &net.UDPAddr{
+		IP:   relayIP,
+		Port: int(rawRelayPort[0])<<8 | int(rawRelayPort[1]),
+	}
+
+	if !relayIP.IsLoopback() {
+		return fmt.Errorf("unexpected non-loopback relay address: %s", relayAddr)
+	}
+
+	relayConn, err := net.DialUDP("udp", nil, relayAddr)
+	if err != nil {
+		return fmt.Errorf("DialUDP failed: %s", err)
+	}
+	defer relayConn.Close()
+
+	err = relayConn.SetDeadline(time.Now().Add(timeout))
+	if err != nil {
+		return fmt.Errorf("SetDeadline failed: %s", err)
+	}
+
+	// The Psiphon server performs transparent DNS forwarding for destination
+	// port 53, using its own resolver, so this destination is not required to
+	// be reachable.
+	dnsConn := newSocks5UDPDatagramConn(
+		relayConn, &net.UDPAddr{IP: net.IP{8, 8, 8, 8}, Port: 53})
+
+	testHostnames := []string{"time.google.com", "time.nist.gov", "pool.ntp.org"}
+	indexes := prng.Perm(len(testHostnames))
+
+	var addrs []net.IP
+	var testHostname string
+	for _, index := range indexes {
+		testHostname = testHostnames[index]
+		addrs, err = resolveIP(testHostname, dnsConn)
+		if err == nil && len(addrs) > 0 && len(addrs[0]) >= 4 {
+			break
+		}
+		t.Logf("UDP associate resolveIP for %s failed: %v", testHostname, err)
+		err = std_errors.New("no address")
+	}
+	if err != nil {
+		return fmt.Errorf("UDP associate DNS request failed: %s", err)
+	}
+
+	ntpIP := net.IP(addrs[0][len(addrs[0])-4:])
+
+	ntpConn := newSocks5UDPDatagramConn(
+		relayConn, &net.UDPAddr{IP: ntpIP, Port: 123})
+
+	ntpData := make([]byte, 48)
+	ntpData[0] = 3<<3 | 3
+
+	_, err = ntpConn.Write(ntpData)
+	if err != nil {
+		return fmt.Errorf("UDP associate NTP write failed: %s", err)
+	}
+
+	_, err = ntpConn.Read(ntpData)
+	if err != nil {
+		return fmt.Errorf("UDP associate NTP read failed: %s", err)
+	}
+
+	var sec, frac uint64
+	sec = uint64(ntpData[43]) | uint64(ntpData[42])<<8 | uint64(ntpData[41])<<16 | uint64(ntpData[40])<<24
+	frac = uint64(ntpData[47]) | uint64(ntpData[46])<<8 | uint64(ntpData[45])<<16 | uint64(ntpData[44])<<24
+
+	nsec := sec * 1e9
+	nsec += (frac * 1e9) >> 32
+
+	ntpNow := time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(nsec)).Local()
+
+	now := time.Now()
+
+	diff := ntpNow.Sub(now)
+	if diff < 0 {
+		diff = -diff
+	}
+
+	if diff > 1*time.Minute {
+		return fmt.Errorf("Unexpected NTP time: %s; local time: %s", ntpNow, now)
+	}
+
+	return nil
+}
+
+// socks5UDPDatagramConn is a net.Conn which wraps and unwraps SOCKS5 UDP
+// request headers for a fixed destination, so that ordinary datagram-oriented
+// code may be run over a SOCKS5 UDP relay.
+type socks5UDPDatagramConn struct {
+	net.Conn
+	destination *net.UDPAddr
+}
+
+func newSocks5UDPDatagramConn(
+	conn net.Conn, destination *net.UDPAddr) *socks5UDPDatagramConn {
+
+	return &socks5UDPDatagramConn{Conn: conn, destination: destination}
+}
+
+// ReadFrom and WriteTo satisfy net.PacketConn, which miekg/dns checks for to
+// select datagram framing over the length-prefixed stream framing.
+func (conn *socks5UDPDatagramConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, err := conn.Read(b)
+	return n, conn.destination, err
+}
+
+func (conn *socks5UDPDatagramConn) WriteTo(b []byte, _ net.Addr) (int, error) {
+	return conn.Write(b)
+}
+
+// Close is a no-op: the underlying relay connection is shared by every
+// destination and is closed by the caller.
+func (conn *socks5UDPDatagramConn) Close() error {
+	return nil
+}
+
+func (conn *socks5UDPDatagramConn) Write(b []byte) (int, error) {
+
+	datagram := []byte{0x00, 0x00, 0x00}
+
+	if ip4 := conn.destination.IP.To4(); ip4 != nil {
+		datagram = append(datagram, 0x01)
+		datagram = append(datagram, ip4...)
+	} else {
+		datagram = append(datagram, 0x04)
+		datagram = append(datagram, conn.destination.IP.To16()...)
+	}
+	datagram = append(datagram,
+		byte(conn.destination.Port>>8), byte(conn.destination.Port))
+	datagram = append(datagram, b...)
+
+	_, err := conn.Conn.Write(datagram)
+	if err != nil {
+		return 0, err
+	}
+
+	return len(b), nil
+}
+
+func (conn *socks5UDPDatagramConn) Read(b []byte) (int, error) {
+
+	buffer := make([]byte, 65535)
+
+	for {
+		n, err := conn.Conn.Read(buffer)
+		if err != nil {
+			return 0, err
+		}
+		if n < 4 {
+			continue
+		}
+
+		position := 4
+		switch buffer[3] {
+		case 0x01:
+			position += net.IPv4len
+		case 0x04:
+			position += net.IPv6len
+		case 0x03:
+			if n < 5 {
+				continue
+			}
+			position += 1 + int(buffer[4])
+		default:
+			continue
+		}
+		position += 2
+		if n < position {
+			continue
+		}
+
+		return copy(b, buffer[position:n]), nil
+	}
 }
 
 func makeTunneledNTPRequest(t *testing.T, localSOCKSProxyPort int, udpgwServerAddress string) error {

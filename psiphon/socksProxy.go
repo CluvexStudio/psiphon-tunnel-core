@@ -103,6 +103,11 @@ func (proxy *SocksProxy) socksConnectionHandler(localConn *socks.SocksConn) (err
 	defer proxy.openConns.Remove(localConn)
 
 	proxy.openConns.Add(localConn)
+
+	if localConn.Req.Command == socks.SocksCmdUDPAssociate {
+		return errors.Trace(proxy.handleUDPAssociate(localConn))
+	}
+
 	// Using downstreamConn so localConn.Close() will be called when remoteConn.Close() is called.
 	// This ensures that the downstream client (e.g., web browser) doesn't keep waiting on the
 	// open connection for data which will never arrive.

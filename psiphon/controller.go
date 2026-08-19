@@ -2294,6 +2294,24 @@ func (controller *Controller) DirectDial(remoteAddr string) (conn net.Conn, err 
 	return DialTCP(controller.runCtx, remoteAddr, controller.untunneledDialConfig)
 }
 
+// DialUDP creates a tunneled UDP flow, as described by
+// Tunneler.DialUDP. Unlike Dial, DialUDP does not use the light proxy, which
+// provides no UDP transport, and never applies split tunnel classification.
+func (controller *Controller) DialUDP(remoteAddr string) (net.Conn, error) {
+
+	tunnel := controller.getNextActiveTunnel(0)
+	if tunnel == nil {
+		return nil, errors.TraceNew("no active tunnels")
+	}
+
+	conn, err := tunnel.DialUDP(remoteAddr)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	return conn, nil
+}
+
 // triggerFetches signals RSL, OSL, DSL, and upgrade download fetchers to
 // begin, if not already running. triggerFetches is called when tunnel
 // establishment fails to complete within a deadline and in other cases where

@@ -71,6 +71,10 @@ type Tunneler interface {
 
 	DirectDial(remoteAddr string) (conn net.Conn, err error)
 
+	// DialUDP creates a tunneled UDP flow. remoteAddr must be an "IP:port"
+	// address. UDP flows are never split tunneled.
+	DialUDP(remoteAddr string) (conn net.Conn, err error)
+
 	SignalComponentFailure()
 }
 
@@ -113,6 +117,8 @@ type Tunnel struct {
 	establishedTime                time.Time
 	handledSSHKeepAliveFailure     int32
 	inFlightConnectedRequestSignal chan struct{}
+	udpgwMutex                     sync.Mutex
+	udpgw                          *udpgwClient
 }
 
 // getCustomParameters helpers wrap the verbose function call chain required
@@ -479,6 +485,8 @@ func (tunnel *Tunnel) Close(isDiscarded bool) {
 			afterFunc.Stop()
 		}
 
+		tunnel.closeUDPGWClient()
+
 		tunnel.sshClient.Close()
 		// tunnel.conn.Close() may get called multiple times, which is allowed.
 		tunnel.conn.Close()
@@ -634,6 +642,88 @@ func (tunnel *Tunnel) DialTCPChannel(
 		downstreamConn: downstreamConn}
 
 	return tunnel.wrapWithTransferStats(conn), false, nil
+}
+
+// DialUDP creates a tunneled UDP flow to remoteAddr, which must be an
+// "IP:port" address; domain names are not supported as the udpgw protocol
+// carries only IP addresses.
+//
+// All UDP flows for a tunnel are multiplexed over a single udpgw channel,
+// which is established on first use and closed with the tunnel. The returned
+// net.Conn has datagram semantics: each Write sends exactly one datagram and
+// each Read returns at most one datagram.
+//
+// UDP flows are never split tunneled.
+func (tunnel *Tunnel) DialUDP(remoteAddr string) (net.Conn, error) {
+
+	host, portStr, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return nil, errors.TraceNew("DialUDP requires an IP address")
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	if port < 0 || port > 65535 {
+		return nil, errors.TraceNew("invalid port")
+	}
+
+	client, err := tunnel.getUDPGWClient()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	flow, err := client.OpenFlow(ip, uint16(port))
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	return newUDPGWConn(flow), nil
+}
+
+func (tunnel *Tunnel) getUDPGWClient() (*udpgwClient, error) {
+
+	tunnel.udpgwMutex.Lock()
+	defer tunnel.udpgwMutex.Unlock()
+
+	if tunnel.udpgw != nil && !tunnel.udpgw.IsClosed() {
+		return tunnel.udpgw, nil
+	}
+
+	// The Psiphon server retains only the most recent udpgw channel per
+	// client, so exactly one channel is established per tunnel.
+	conn, splitTunnel, err := tunnel.DialTCPChannel(
+		UDPGWServerAddress, true, nil)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	if splitTunnel {
+		return nil, errors.TraceNew("unexpected split tunnel classification")
+	}
+
+	tunnel.udpgw = newUDPGWClient(conn, true)
+
+	NoticeInfo("DialUDP: established udpgw channel")
+
+	return tunnel.udpgw, nil
+}
+
+func (tunnel *Tunnel) closeUDPGWClient() {
+
+	tunnel.udpgwMutex.Lock()
+	client := tunnel.udpgw
+	tunnel.udpgw = nil
+	tunnel.udpgwMutex.Unlock()
+
+	if client != nil {
+		_ = client.Close()
+	}
 }
 
 func (tunnel *Tunnel) DialPacketTunnelChannel() (net.Conn, error) {

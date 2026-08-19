@@ -16,8 +16,12 @@ const (
 	socksAuthUsernamePassword    = 0x02
 	socksAuthNoAcceptableMethods = 0xff
 
-	socksCmdConnect = 0x01
-	socksReserved   = 0x00
+	socksCmdConnect      = 0x01
+	socksCmdUDPAssociate = 0x03
+	socksReserved        = 0x00
+
+	SocksCmdConnect      = socksCmdConnect
+	SocksCmdUDPAssociate = socksCmdUDPAssociate
 
 	socksAtypeV4         = 0x01
 	socksAtypeDomainName = 0x03
@@ -55,7 +59,12 @@ const socksRequestTimeout = 5 * time.Second
 
 // SocksRequest describes a SOCKS request.
 type SocksRequest struct {
-	// The endpoint requested by the client as a "host:port" string.
+	// The SOCKS5 command, either SocksCmdConnect or SocksCmdUDPAssociate.
+	// SOCKS4a requests are always SocksCmdConnect.
+	Command byte
+	// The endpoint requested by the client as a "host:port" string. For
+	// SocksCmdUDPAssociate this is the address the client will send datagrams
+	// from, which clients commonly leave as "0.0.0.0:0".
 	Target string
 	// The userid string sent by the client.
 	Username string
@@ -507,7 +516,7 @@ func socks5AuthRFC1929(
 }
 
 // socks5ReadCommand reads a SOCKS5 client command and parses out the relevant
-// fields into a SocksRequest.  Only CMD_CONNECT is supported.
+// fields into a SocksRequest. CMD_CONNECT and CMD_UDP_ASSOCIATE are supported.
 func socks5ReadCommand(rw *bufio.ReadWriter, req *SocksRequest) (err error) {
 	sendErrResp := func(reason byte) {
 		// Swallow errors that occur when writing/flushing the response,
@@ -522,11 +531,20 @@ func socks5ReadCommand(rw *bufio.ReadWriter, req *SocksRequest) (err error) {
 		err = newTemporaryNetError("socks5ReadCommand: %s", err)
 		return
 	}
-	if err = socksReadByteVerify(rw.Reader, "command", socksCmdConnect); err != nil {
-		sendErrResp(SocksRepCommandNotSupported)
-		err = newTemporaryNetError("socks5ReadCommand: %s", err)
+	var command byte
+	if command, err = socksReadByte(rw.Reader); err != nil {
+		sendErrResp(SocksRepGeneralFailure)
+		err = newTemporaryNetError("socks5ReadCommand: Failed to read command: %s", err)
 		return
 	}
+	if command != socksCmdConnect && command != socksCmdUDPAssociate {
+		sendErrResp(SocksRepCommandNotSupported)
+		err = newTemporaryNetError(
+			"socks5ReadCommand: SOCKS message field command was 0x%02x, not 0x%02x or 0x%02x",
+			command, socksCmdConnect, socksCmdUDPAssociate)
+		return
+	}
+	req.Command = command
 	if err = socksReadByteVerify(rw.Reader, "reserved", socksReserved); err != nil {
 		sendErrResp(SocksRepGeneralFailure)
 		err = newTemporaryNetError("socks5ReadCommand: %s", err)
@@ -623,6 +641,145 @@ func sendSocks5Response(w io.Writer, code byte) error {
 // Send a SOCKS5 response code 0x00.
 func sendSocks5ResponseGranted(w io.Writer) error {
 	return sendSocks5Response(w, socksRepSucceeded)
+}
+
+// GrantUDPAssociate sends a SOCKS5 success response carrying the address and
+// port of the UDP relay the client is to send its datagrams to. Unlike Grant,
+// the address is significant and must be reachable by the client.
+func (conn *SocksConn) GrantUDPAssociate(addr *net.UDPAddr) error {
+	if conn.socksVersion != socks5Version {
+		return newTemporaryNetError(
+			"GrantUDPAssociate: UDP associate requires SOCKS5")
+	}
+	return sendSocks5ResponseGrantedUDPAssociate(conn, addr)
+}
+
+func sendSocks5ResponseGrantedUDPAssociate(w io.Writer, addr *net.UDPAddr) error {
+	if addr == nil {
+		return newTemporaryNetError(
+			"sendSocks5ResponseGrantedUDPAssociate: missing address")
+	}
+
+	resp := []byte{socks5Version, socksRepSucceeded, socksReserved}
+
+	encodedAddr, err := EncodeSocks5Address(addr.IP, uint16(addr.Port))
+	if err != nil {
+		return err
+	}
+	resp = append(resp, encodedAddr...)
+
+	if _, err := w.Write(resp); err != nil {
+		return newTemporaryNetError(
+			"sendSocks5ResponseGrantedUDPAssociate: Failed write response: %s", err)
+	}
+
+	return nil
+}
+
+// EncodeSocks5Address encodes an IP address and port in the SOCKS5 address
+// format: ATYP, followed by the address, followed by the port in network byte
+// order.
+func EncodeSocks5Address(ip net.IP, port uint16) ([]byte, error) {
+	var encoded []byte
+	if ip4 := ip.To4(); ip4 != nil {
+		encoded = make([]byte, 0, 1+net.IPv4len+2)
+		encoded = append(encoded, socksAtypeV4)
+		encoded = append(encoded, ip4...)
+	} else if ip16 := ip.To16(); ip16 != nil {
+		encoded = make([]byte, 0, 1+net.IPv6len+2)
+		encoded = append(encoded, socksAtypeV6)
+		encoded = append(encoded, ip16...)
+	} else {
+		return nil, newTemporaryNetError(
+			"EncodeSocks5Address: invalid IP address")
+	}
+	encoded = append(encoded, byte(port>>8), byte(port))
+	return encoded, nil
+}
+
+// Socks5UDPHeaderSize is the size of the fixed portion of the SOCKS5 UDP
+// request header, RSV and FRAG, which precedes the destination address.
+const Socks5UDPHeaderSize = 3
+
+// DecodeSocks5UDPDatagram parses a SOCKS5 UDP request header, returning the
+// destination host, the destination port, and the payload, which aliases the
+// input datagram.
+//
+// Fragmented datagrams, which have a non-zero FRAG field, are rejected: no
+// common SOCKS5 client emits them and reassembly is not implemented.
+func DecodeSocks5UDPDatagram(datagram []byte) (string, uint16, []byte, error) {
+
+	if len(datagram) < Socks5UDPHeaderSize+1 {
+		return "", 0, nil, newTemporaryNetError(
+			"DecodeSocks5UDPDatagram: datagram is too short")
+	}
+	if datagram[2] != 0 {
+		return "", 0, nil, newTemporaryNetError(
+			"DecodeSocks5UDPDatagram: fragmented datagrams are not supported")
+	}
+
+	atype := datagram[3]
+	position := 4
+
+	var host string
+	switch atype {
+	case socksAtypeV4:
+		if len(datagram) < position+net.IPv4len+2 {
+			return "", 0, nil, newTemporaryNetError(
+				"DecodeSocks5UDPDatagram: truncated IPv4 address")
+		}
+		host = net.IP(datagram[position : position+net.IPv4len]).String()
+		position += net.IPv4len
+
+	case socksAtypeV6:
+		if len(datagram) < position+net.IPv6len+2 {
+			return "", 0, nil, newTemporaryNetError(
+				"DecodeSocks5UDPDatagram: truncated IPv6 address")
+		}
+		host = net.IP(datagram[position : position+net.IPv6len]).String()
+		position += net.IPv6len
+
+	case socksAtypeDomainName:
+		length := int(datagram[position])
+		position++
+		if length == 0 {
+			return "", 0, nil, newTemporaryNetError(
+				"DecodeSocks5UDPDatagram: domain name with 0 length")
+		}
+		if len(datagram) < position+length+2 {
+			return "", 0, nil, newTemporaryNetError(
+				"DecodeSocks5UDPDatagram: truncated domain name")
+		}
+		host = string(datagram[position : position+length])
+		position += length
+
+	default:
+		return "", 0, nil, newTemporaryNetError(
+			"DecodeSocks5UDPDatagram: unsupported address type 0x%02x", atype)
+	}
+
+	port := uint16(datagram[position])<<8 | uint16(datagram[position+1])
+	position += 2
+
+	return host, port, datagram[position:], nil
+}
+
+// EncodeSocks5UDPDatagram writes a SOCKS5 UDP response header for the given
+// source address followed by the payload. The returned slice is appended to
+// buffer, which may be nil.
+func EncodeSocks5UDPDatagram(
+	buffer []byte, ip net.IP, port uint16, payload []byte) ([]byte, error) {
+
+	encodedAddr, err := EncodeSocks5Address(ip, port)
+	if err != nil {
+		return nil, err
+	}
+
+	buffer = append(buffer, socksReserved, socksReserved, 0)
+	buffer = append(buffer, encodedAddr...)
+	buffer = append(buffer, payload...)
+
+	return buffer, nil
 }
 
 // Send a SOCKS5 response with the provided failure reason.
@@ -736,6 +893,7 @@ func readSocks4aConnect(r *bufio.Reader) (req SocksRequest, err error) {
 		err = newTemporaryNetError("readSocks4aConnect: SOCKS header had command 0x%02x, not 0x%02x", cmdConnect, socksCmdConnect)
 		return
 	}
+	req.Command = socksCmdConnect
 
 	var rawPort []byte
 	if rawPort, err = socksReadBytes(r, 2); err != nil {
