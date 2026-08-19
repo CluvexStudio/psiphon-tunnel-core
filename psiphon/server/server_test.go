@@ -740,14 +740,15 @@ func TestChangeBytesConfig(t *testing.T) {
 func TestSplitTunnel(t *testing.T) {
 	runServer(t,
 		&runServerConfig{
-			tunnelProtocol:       "OSSH",
-			requireAuthorization: true,
-			doTunneledWebRequest: true,
-			doTunneledNTPRequest: true,
-			doDanglingTCPConn:    true,
-			doSplitTunnel:        true,
-			doLogHostProvider:    true,
-			doLogProtobuf:        useProtobufLogging,
+			tunnelProtocol:         "OSSH",
+			requireAuthorization:   true,
+			doTunneledWebRequest:   true,
+			doTunneledNTPRequest:   true,
+			doTunneledUDPAssociate: true,
+			doDanglingTCPConn:      true,
+			doSplitTunnel:          true,
+			doLogHostProvider:      true,
+			doLogProtobuf:          useProtobufLogging,
 		})
 }
 
