@@ -10,8 +10,13 @@ fi
 # $1, if specified, is go build tags
 if [ -z ${1+x} ]; then BUILD_TAGS=""; else BUILD_TAGS="$1"; fi
 
-# At this time, psiphon-tunnel-core doesn't support modules
-export GO111MODULE=off
+# gomobile defaults to API 16, which newer NDKs reject, so an API level must be
+# passed explicitly. Both it and the ABI list can be overridden to trim CI builds.
+ANDROID_API="${PSIPHON_ANDROID_API:-35}"
+TARGETS="${PSIPHON_TARGETS:-android/arm,android/arm64,android/386,android/amd64}"
+
+# Use modules for newer Go versions
+export GO111MODULE=auto
 
 export GOCACHE=/tmp
 
@@ -49,7 +54,7 @@ echo " Build revision: ${BUILDREV}"
 echo " Go version: ${GOVERSION}"
 echo ""
 
-gomobile bind -v -x -target=android/arm,android/arm64,android/386,android/amd64 -tags="${BUILD_TAGS}" -ldflags="$LDFLAGS" github.com/Psiphon-Labs/psiphon-tunnel-core/MobileLibrary/psi
+gomobile bind -v -x -androidapi "${ANDROID_API}" -target="${TARGETS}" -tags="${BUILD_TAGS}" -ldflags="$LDFLAGS" github.com/Psiphon-Labs/psiphon-tunnel-core/MobileLibrary/psi
 if [ $? != 0 ]; then
   echo "..'gomobile bind' failed, exiting"
   exit $?
