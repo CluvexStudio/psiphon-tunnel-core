@@ -10,19 +10,17 @@ fi
 # $1, if specified, is go build tags
 if [ -z ${1+x} ]; then BUILD_TAGS=""; else BUILD_TAGS="$1"; fi
 
-# gomobile defaults to API 16, which newer NDKs reject, so an API level must be
-# passed explicitly. Both it and the ABI list can be overridden to trim CI builds.
 ANDROID_API="${PSIPHON_ANDROID_API:-35}"
 TARGETS="${PSIPHON_TARGETS:-android/arm,android/arm64,android/386,android/amd64}"
 
-# Use modules for newer Go versions
 export GO111MODULE=auto
 
 export GOCACHE=/tmp
 
 BUILDINFOFILE="psiphon-tunnel-core_buildinfo.txt"
 BUILDDATE=$(date --iso-8601=seconds)
-BUILDREPO="https://github.com/Psiphon-Labs/psiphon-tunnel-core.git"
+BUILDREPO=$(git config --get remote.origin.url 2>/dev/null ||
+  echo "https://github.com/Psiphon-Labs/psiphon-tunnel-core.git")
 BUILDREV=$(git rev-parse --short HEAD)
 GOVERSION=$(go version | perl -ne '/go version (.*?) / && print $1')
 
